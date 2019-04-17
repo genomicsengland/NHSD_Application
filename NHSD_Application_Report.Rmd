@@ -1,0 +1,199 @@
+---
+title: "NHSD Application"
+author: "GeoC"
+date: "15/04/2019"
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r readIn, include = FALSE}
+ 
+library(dplyr)
+library(readr)
+
+report_date <- "2019-04-12"
+
+#list claning Q1_18 two installments
+MR1418_01_ListCleaningCurrentStatusReport_50000_20180918_RMD <- read_csv("~/NHSD/Q1_2018_Data_Return/MR1418_01_ListCleaningCurrentStatusReport_50000_20180918_RMD.csv", 
+    col_names = FALSE, col_types = cols(X1 = col_character(), X2 = col_character()))
+
+MR1418_02_ListCleaningCurrentStatusReport_37263_20180918_RMD <- read_csv("~/Documents/NHSD_HES/PastApplications/MR1418_ListCleaningReport_20180920/MR1418_02_ListCleaningCurrentStatusReport_37263_20180918_RMD.csv", 
+    col_names = FALSE, col_types = cols(X1 = col_character(), X2 = col_character()))
+
+lc <- rbind.data.frame(MR1418_01_ListCleaningCurrentStatusReport_50000_20180918_RMD, MR1418_02_ListCleaningCurrentStatusReport_37263_20180918_RMD)
+
+#join and make readable
+lc <- lc %>% select(X1, X2)
+names(lc) <- c("participant_id", "nhs_no")
+
+#latest flagging Q2_18
+MR1418_01_FlaggingCurrentStatusReport_12886_20181217_RMD <- read.csv("~/NHSD/Q2_2018_Data_Return/RAW/MR1418_01_FlaggingCurrentStatusReport_12886_20181217_RMD.csv")
+#fl <- MR1418_01_FlaggingCurrentStatusReport_12886_20181217_RMD %>% select(Supplied.Member.Number, Latest.NHS.Number..New.) %>% distinct()
+#names(fl) <- c("participant_id", "nhs_no")
+
+#remove the twin participant_ids of DUPLICATE and then distinctify the amended/cancelled multiples 
+MR1418_01_FlaggingCurrentStatusReport_12886_20181217_RMD %>% filter(!grepl("DUPLICATE", Cancelled.Event...Amended.Event..Duplicated.Patient.Notification )) %>% select(Supplied.Member.Number, Latest.NHS.Number..New.) %>% distinct() -> fl2
+names(fl2) <- c("participant_id", "nhs_no")
+fl2$participant_id <- as.character(fl2$participant_id)
+lc$participant_id <- as.character(lc$participant_id)
+participants_old <- rbind.data.frame(fl2, lc, stringsAsFactors = FALSE)
+
+#output of elibible flag sql script. 
+AllGelEligibility_12_04_19 <- read_csv("~/SQL/CSV_Outputs/AllGelEligibility_12_04_19.csv",
+col_types = cols(participant_id = col_character()))
+# View(AllGelEligibility_12_04_19)
+
+#output of all registered participants with their address and ods codes.
+AllGelRegODS_12_04_19 <- read_csv("~/SQL/CSV_Outputs/AllGelRegODS_12_04_19.csv",
+col_types = cols(participant_id = col_character()),
+na = "empty")
+# View(AllGelRegODS_12_04_19)
+
+#output of all withdrawals script
+AllGelWRD_12_04_19 <- read_csv("~/SQL/CSV_Outputs/AllGelWRD_12_04_19.csv",
+col_types = cols(participant_identifiers_id = col_character()),
+na = "empty")
+
+#old application
+MR1418_01_108786 <- read_csv("~/Downloads/MR1418_01_10786.csv", col_names=FALSE, col_types= cols(X2  = col_character()), na="empty" )
+
+#old_applicationCLLs
+CLLAllHist <- participants_old %>% 
+  filter(grepl("-",participant_id )) 
+
+
+#old_application_mainProgramme
+MainProgrammeAllHist <- participants_old %>% 
+    filter(!participant_id %in% CLLAllHist$participant_id) %>% 
+    filter(nchar(participant_id) > 8)
+
+#old_application_RDPilot
+RDPilotAllHist <- participants_old %>% filter(nchar(participant_id) < 6)  
+
+#View(AllGelWRD_12_04_19)
+#load("/Users/georgiachan/NHSD/Q2_2018_Data_Return/RData/valid_participants_Q2_2018.RData")
+#dim(validpartids)
+
+
+```
+
+## Overview
+
+Numbers valid on `r report_date`
+
+**Registered**    
+  All registered DAMS participants = **`r dim(AllGelRegODS_12_04_19)[1]`** (includes test participants)  
+  All registered DDF participants = **`r dim(AllGelEligibility_12_04_19)[1]`** 
+  
+**Withdrawn**  
+  Total of fully withrdrawn participants = **`r dim(AllGelWRD_12_04_19 %>% filter((grepl("full", withdrawal_option_id))|(grepl("FULL", withdrawal_option_id))))[1]`**
+
+**List cleaning plus latest flagging**  
+  The entire list of participants that have been traced by NHSD to this date = **`r dim(participants_old)[1]`**  
+  Includes RD Pilot, First Phase of CLL and DAMS Main Programme. 
+ 
+  + **Main programme**  
+      Total = **`r dim(MainProgrammeAllHist)[1]`**
+  
+  + **CLL participants (1st application) **  
+      CLL cohort lives outside DAMS (apart from validation cohort that has no other PID attached to be traceable). Secondary data is requested since Q1_18.
+      All CLL participants traced in the existing NHSD cohort:  
+      Total = **`r  dim(CLLAllHist)[1]`**  (out of  `r dim(MR1418_01_108786 %>% filter(grepl("-", X2)))[1]`). 
+  
+  + **Rare Disease pilot**
+      Rare disease pilot lives outside DAMS (although there are participants recruited in the main programme as well that were flagged as duplicates from NHSD since they have the same NHS number). Their total number and consent status is frozen. Total = **`r dim(RDPilotAllHist)[1]`**
+    
+    
+## Eligibility exclusions (drawn from DDF). 
+Exemptions from application to secondary data:
+
+```{r eligibility, include = FALSE}
+cohort_ods <- c("TRX", "BCN", "MAJ", "PHA", "ALL", "NEQ")
+#Participants in cohorts
+GelCohortPids <- AllGelRegODS_12_04_19 %>% filter(ods %in% cohort_ods) %>% select(participant_id)
+
+#eligible from sample presence
+eligible.pid <- AllGelEligibility_12_04_19 %>% filter(eligible==TRUE)
+non.eligible.pid <- AllGelEligibility_12_04_19 %>% filter(eligible==FALSE)
+
+#non eligible from wrong type of consent (age) 
+load("./consent.RData")
+child.consent <- d %>% filter(require_reconsent==TRUE) 
+cd <- child.consent %>% select(participant_identifiers_id, require_reconsent) 
+names(cd) <- c("participant_id", "require_reconsent")
+
+#eligible_from_valid <- validpartids %>% filter(participant_id %in% eligible.pid$participant_id)
+#(dim(validpartids) - dim(eligible_from_valid))/dim(validpartids)=
+#(dim(validpartids) - dim(eligible_from_valid))/dim(validpartids)
+sum(GelCohortPids$participant_id %in% MainProgrammeAllHist$participant_id)
+
+```
+
+* **Cohorts**
+
+    ODS codes of cohorts with consent prohibiting linkage to secondary datasets:  
+      **TRX**, **BCN**, **MAJ**, **PHA**, **ALL**, **NEQ**.
+    Total = `r dim(GelCohortPids)[1]`
+    
+* **Consent**
+  + All fully withdrawn participants. Total = **`r dim(AllGelWRD_12_04_19 %>% filter((grepl("full", withdrawal_option_id))|(grepl("FULL", withdrawal_option_id))))[1]`**
+  + Participants who are 16+ but on chid concent form + participants whose form will be invalid before next application. **`r dim(child.consent)[1]`**
+
+* **Sample Non-Eligibility Criteria**
+
+  + **Cancer** - All cancer cases without a samples not sent notification.
+  + **Rare D** - All rare disease cases without DNA sample.  
+
+    Total eligible (DDF) = **`r dim(eligible.pid)[1]`**  
+    Total non eligible = **`r dim(non.eligible.pid)[1]`**
+    
+```{r final, include = FALSE }
+participants_newInc <- eligible.pid %>% 
+  filter(!participant_id %in% participants_old$participant_id)
+
+
+#new list should exclude 
+participants_newExcExc <- AllGelEligibility_12_04_19 %>% 
+  filter(!participant_id %in% participants_old$participant_id) %>% #exclude old participants
+  filter(!participant_id %in% GelCohortPids$participant_id) %>% #exclude cohorts
+  filter(!participant_id %in% cd$participant_id) %>%  #filter consents
+  filter(participant_id %in% eligible.pid$participant_id) #filter sample exclusions
+  
+participants_newIncExc <- AllGelEligibility_12_04_19 %>% 
+  filter(!participant_id %in% participants_old$participant_id) %>% #exclude old participants
+  filter(!participant_id %in% GelCohortPids$participant_id) %>% #exclude cohorts
+  filter(!participant_id %in% cd$participant_id) #filter consents
+
+ApplicationNewExcExc <- AllGelRegODS_12_04_19 %>%
+  filter(participant_id %in% participants_newExcExc$participant_id)
+ApplicationNewIncExc <- AllGelRegODS_12_04_19 %>%
+  filter(participant_id %in% participants_newIncExc$participant_id)
+
+participants_wdrIncExc <- c(non.eligible.pid$participant_id, GelCohortPids$participant_id, cd$participant_id)
+participants_wdrExcExc <- c(GelCohortPids$participant_id, cd$participant_id)
+  
+save(ApplicationNewExcExc, ApplicationNewIncExc, participants_wdrIncExc,participants_wdrExcExc, file= "./Application_Q3_18.RData" )
+#eligible.pid %>% filter(!participant_id %in% MainProgrammeAllHist$participant_id ) -> newPids
+```
+
+## New Application
+
+* **Main programme**  
+    
+    Total new without exclusions = **`r dim(participants_newIncExc)[1]`**  
+    Total new with exclusions = **`r dim(participants_newExcExc)[1]`**  
+    
+* **CLL new**  
+    Total = 16
+
+* **Withdrawals**  
+
+    Total withdrawasl with exclusions = **`r length(participants_wdrIncExc)`**  
+    Total withdrawals without exclusions = **`r length(participants_wdrExcExc)`**    
+ 
